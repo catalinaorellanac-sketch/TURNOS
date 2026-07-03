@@ -421,20 +421,41 @@ function setExtEdit(v){eExtVal=v;['eExt1','eExt2','eExt3'].forEach((id,i)=>docum
 /* ── LOCAL STORAGE ── */
 function saveLocal(){try{localStorage.setItem(LOCAL_KEY,JSON.stringify({data:allData,ts:Date.now()}));}catch(e){}}
 
-/* ── CARGA DATOS ── */
+/* ── CARGA DATOS — FIX: timeout de seguridad para GitHub Pages / deploys con acceso restringido ──
+   Si Google Apps Script no responde (deployment no público, URL vieja, red bloqueada, etc.)
+   el <script> JSONP puede "cargar" sin ejecutar nunca el callback, dejando el loader pegado
+   para siempre. Este timeout evita ese cuelgue: a los 10s cae a datos locales/históricos. */
 function cargarDatos(){
   showLoad('Cargando datos...');
-  const cb='jcb_cata_'+Date.now();let scriptEl=null;
+  const cb='jcb_cata_'+Date.now();
+  let scriptEl=null,resuelto=false;
+
+  function fallbackLocal(motivo){
+    if(resuelto)return;resuelto=true;
+    clearTimeout(timeoutId);
+    setSync('error', motivo==='timeout' ? '⚠ sin respuesta' : '⚠ offline');
+    try{
+      const r=localStorage.getItem(LOCAL_KEY);
+      if(r){const p=JSON.parse(r);allData=mergeHistorico(p.data||p);}
+      else{allData=mergeHistorico({});}
+    }catch(e){allData=mergeHistorico({});}
+    hideLoad();renderAll();
+    if(motivo==='timeout'){
+      toast('⚠️ No se pudo conectar al servidor. Mostrando datos locales.',3600);
+    }
+    delete window[cb];
+    if(scriptEl&&scriptEl.parentNode)scriptEl.parentNode.removeChild(scriptEl);
+  }
+
+  const timeoutId=setTimeout(()=>fallbackLocal('timeout'),10000);
+
   window[cb]=function(p){
+    if(resuelto)return;resuelto=true;clearTimeout(timeoutId);
     try{if(p._config){cfg={...cfg,...p._config};delete p._config;loadCfg();}allData=mergeHistorico(p);setSync('ok','● sync');saveLocal();saveDatos(false);}catch(e){setSync('error','⚠ error');}
     hideLoad();renderAll();delete window[cb];if(scriptEl&&scriptEl.parentNode)scriptEl.parentNode.removeChild(scriptEl);
   };
   scriptEl=document.createElement('script');
-  scriptEl.onerror=function(){
-    setSync('error','⚠ offline');
-    try{const r=localStorage.getItem(LOCAL_KEY);if(r){const p=JSON.parse(r);allData=mergeHistorico(p.data||p);}else{allData=mergeHistorico({});}}catch(e){allData=mergeHistorico({});}
-    hideLoad();renderAll();delete window[cb];
-  };
+  scriptEl.onerror=function(){fallbackLocal('error');};
   scriptEl.src=SCRIPT_URL+'?callback='+cb+'&t='+Date.now();
   document.head.appendChild(scriptEl);
 }
